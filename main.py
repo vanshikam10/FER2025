@@ -9,72 +9,68 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, classification_report
 from keras.models import Sequential, load_model
 from keras.layers import Conv2D, MaxPooling2D, Dropout, Flatten, Dense
+import argparse
 
 # -----------------------------
-# Step 1: Load and Prepare Dataset (from train/test folders)
+# Argument Parser for modes
 # -----------------------------
+parser = argparse.ArgumentParser(description="Facial Expression Recognition")
+parser.add_argument('--mode', choices=['train', 'test'], required=True, help="train or test")
+parser.add_argument('--image', type=str, help="Path to test image (required for test mode)")
+args = parser.parse_args()
 
-data_dir = 'dataset'
+# -----------------------------
+# Configuration
+# -----------------------------
+MODEL_FILENAME = "face_expression_model.h5"
+DATASET_PATH = "dataset"
+IMAGE_SIZE = (48, 48)
 
-X = []
-y = []
-emotion_labels = []
+# Sorted emotion labels (to avoid mismatches)
+emotion_labels = sorted(os.listdir(os.path.join(DATASET_PATH, "train")))
 
-print("📁 Scanning dataset folders...")
-for subset in ['train', 'test']:
-    subset_path = os.path.join(data_dir, subset)
-    if not os.path.exists(subset_path):
-        print(f"⚠️ Skipping missing folder: {subset_path}")
-        continue
+# -----------------------------
+# Mode: Train
+# -----------------------------
+if args.mode == 'train':
+    print("📁 Scanning and loading dataset...")
 
-    for label in os.listdir(subset_path):
-        label_path = os.path.join(subset_path, label)
-        if not os.path.isdir(label_path):
+    X = []
+    y = []
+
+    for subset in ['train', 'test']:
+        subset_path = os.path.join(DATASET_PATH, subset)
+        if not os.path.exists(subset_path):
+            print(f"⚠️ Skipping missing folder: {subset_path}")
             continue
 
-        if label not in emotion_labels:
-            emotion_labels.append(label)
-
-        label_index = emotion_labels.index(label)
-
-        img_files = os.listdir(label_path)
-        print(f"📦 Loading {len(img_files)} images from '{subset}/{label}'")
-        for img_name in tqdm(img_files, desc=f"{subset}/{label}"):
-            img_path = os.path.join(label_path, img_name)
-            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-            if img is None:
+        for label in os.listdir(subset_path):
+            label_path = os.path.join(subset_path, label)
+            if not os.path.isdir(label_path):
                 continue
-            img = cv2.resize(img, (48, 48))
-            X.append(img)
-            y.append(label_index)
 
-emotion_labels.sort()
-print("✅ Emotion classes used:", emotion_labels)
+            label_index = emotion_labels.index(label.lower())
 
-X = np.array(X).astype('float32') / 255.0
-X = np.expand_dims(X, -1)
-y = to_categorical(y, num_classes=len(emotion_labels))
 
-print(f"✅ Dataset loaded: {len(X)} total images")
+            img_files = os.listdir(label_path)
+            print(f"📦 Loading {len(img_files)} images from '{subset}/{label}'")
+            for img_name in tqdm(img_files, desc=f"{subset}/{label}"):
+                img_path = os.path.join(label_path, img_name)
+                img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                if img is None:
+                    continue
+                img = cv2.resize(img, IMAGE_SIZE)
+                X.append(img)
+                y.append(label_index)
 
-# -----------------------------
-# Step 2: Split Data
-# -----------------------------
+    X = np.array(X).astype('float32') / 255.0
+    X = np.expand_dims(X, -1)
+    y = to_categorical(y, num_classes=len(emotion_labels))
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-print(f"🧪 Training samples: {len(X_train)} | Testing samples: {len(X_test)}")
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# -----------------------------
-# Step 3: Build and Train Model
-# -----------------------------
+    print(f"🧪 Training samples: {len(X_train)} | Testing samples: {len(X_test)}")
 
-MODEL_FILENAME = "face_expression_model.h5"
-
-if os.path.exists(MODEL_FILENAME):
-    print(f"ℹ️ Model already exists. Loading '{MODEL_FILENAME}'...")
-    model = load_model(MODEL_FILENAME)
-else:
-    print("⚙️ Building and training model...")
     model = Sequential([
         Conv2D(32, (3, 3), activation='relu', input_shape=(48, 48, 1)),
         MaxPooling2D(pool_size=(2, 2)),
@@ -92,19 +88,14 @@ else:
 
     model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-    print("🚀 Training started. This may take a few minutes...")
+    print("🚀 Training started...")
     model.fit(X_train, y_train, epochs=20, batch_size=64, validation_data=(X_test, y_test))
     print("✅ Training completed!")
 
     model.save(MODEL_FILENAME)
     print(f"💾 Model saved as '{MODEL_FILENAME}'.")
 
-    # -----------------------------
-    # Step 4: Evaluate with Confusion Matrix
-    # -----------------------------
-
-    print("📊 Generating confusion matrix and classification report...")
-
+    print("📊 Generating confusion matrix...")
     y_pred_probs = model.predict(X_test)
     y_pred = np.argmax(y_pred_probs, axis=1)
     y_true = np.argmax(y_test, axis=1)
@@ -113,8 +104,8 @@ else:
     plt.figure(figsize=(10, 8))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=emotion_labels, yticklabels=emotion_labels)
     plt.title('Confusion Matrix')
-    plt.xlabel('Predicted Label')
-    plt.ylabel('True Label')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
     plt.savefig("confusion_matrix.png")
     plt.show()
 
@@ -122,18 +113,24 @@ else:
     print(classification_report(y_true, y_pred, target_names=emotion_labels))
 
 # -----------------------------
-# Step 5: Predict Emotion from Image
+# Mode: Test
 # -----------------------------
+elif args.mode == 'test':
+    if not args.image:
+        print("❌ Please provide an image path with --image")
+        exit()
 
-def predict_emotion_from_image(image_path):
-    if not os.path.exists(image_path):
-        print(f"❌ ERROR: Image file '{image_path}' not found!")
-        return
+    if not os.path.exists(MODEL_FILENAME):
+        print(f"❌ ERROR: Trained model '{MODEL_FILENAME}' not found.")
+        exit()
+
+    model = load_model(MODEL_FILENAME)
+    image_path = args.image
 
     image = cv2.imread(image_path)
     if image is None:
         print("❌ ERROR: Could not read the image.")
-        return
+        exit()
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -141,14 +138,13 @@ def predict_emotion_from_image(image_path):
 
     if len(faces) == 0:
         print("⚠️ No face detected in the image.")
-        return
+        exit()
 
     for (x, y, w, h) in faces:
         roi = gray[y:y + h, x:x + w]
-        roi = cv2.resize(roi, (48, 48))
+        roi = cv2.resize(roi, IMAGE_SIZE)
         roi = roi.astype("float32") / 255.0
-        roi = np.expand_dims(roi, axis=0)
-        roi = np.expand_dims(roi, -1)
+        roi = np.expand_dims(roi, axis=(0, -1))
 
         prediction = model.predict(roi)
         emotion = emotion_labels[np.argmax(prediction)]
@@ -164,10 +160,3 @@ def predict_emotion_from_image(image_path):
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         break
-
-# -----------------------------
-# Step 6: Test with Your Image
-# -----------------------------
-
-test_image_path = "test_image.jpeg"
-predict_emotion_from_image(test_image_path)
